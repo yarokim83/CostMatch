@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel Compare Pro</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Excel Data Comparator</h1>
+            <p>입고 리스트와 비용 정산 파일을 비교하여 차이점을 분석합니다.</p>
+        </header>
+
+        <main>
+            <div class="upload-section">
+                <div class="drop-zone" id="drop-zone-1">
+                    <div class="icon">📄</div>
+                    <h3>입고 리스트 (File 1)</h3>
+                    <p>드래그 앤 드롭 또는 클릭하여 업로드</p>
+                    <input type="file" id="file1" accept=".xlsx, .xls" hidden>
+                    <div class="file-info" id="file-info-1"></div>
+                </div>
+
+                <div class="drop-zone" id="drop-zone-2">
+                    <div class="icon">💰</div>
+                    <h3>비용 정산 파일 (File 2)</h3>
+                    <p>드래그 앤 드롭 또는 클릭하여 업로드</p>
+                    <input type="file" id="file2" accept=".xlsx, .xls" hidden>
+                    <div class="file-info" id="file-info-2"></div>
+                </div>
+            </div>
+
+            <button id="compare-btn" class="primary-btn">비교 분석 시작</button>
+
+            <div id="result-section" class="hidden">
+                <h2>분석 결과</h2>
+                <div id="output"></div>
+            </div>
+        </main>
+    </div>
+    <script src="/static/script.js"></script>
+</body>
+</html>
