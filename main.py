@@ -3,6 +3,8 @@ from tkinter import filedialog, messagebox
 import pandas as pd
 import os
 import threading
+import openpyxl
+from openpyxl.styles import PatternFill
 
 # Set theme
 ctk.set_appearance_mode("Dark")
@@ -164,30 +166,6 @@ class ExcelComparatorApp(ctk.CTk):
             target_groups = ['WIRE ROPE', 'INVENTORY']
             df1_filtered = df1[df1['Part Group'].isin(target_groups)].copy()
             
-            # --- Generate Report File (마감자료 with PRL.xlsx) ---
-            try:
-                report_cols = [
-                    "Type", "Date", "Part No.", "Part Type", "Part Group", 
-                    "Description", "Qty", "Unit Price", "Total Price", 
-                    "Doc No.", "Mach No.", "Vendor"
-                ]
-                
-                # Check if all columns exist
-                missing_report_cols = [c for c in report_cols if c not in df1_filtered.columns]
-                if missing_report_cols:
-                    self.log(f"\n[주의] 리포트 생성 중 다음 컬럼이 없어 제외됩니다: {missing_report_cols}")
-                    existing_report_cols = [c for c in report_cols if c in df1_filtered.columns]
-                    df_report = df1_filtered[existing_report_cols].copy()
-                else:
-                    df_report = df1_filtered[report_cols].copy()
-                
-                report_filename = "마감자료 with PRL.xlsx"
-                df_report.to_excel(report_filename, index=False)
-                self.log(f"\n[알림] '{report_filename}' 파일이 생성되었습니다. (건수: {len(df_report)} 건)")
-                
-            except Exception as e:
-                self.log(f"\n[오류] 리포트 파일 생성 실패: {str(e)}")
-
             # Group by 'Doc No.' and sum 'Total Price'
             # Convert Doc No. to string to ensure matching works
             df1_filtered['Doc No.'] = df1_filtered['Doc No.'].astype(str).str.strip()
@@ -310,6 +288,78 @@ class ExcelComparatorApp(ctk.CTk):
             # Total Diff Calculation
             total_diff = df1_grouped['Total Price'].sum() - df2_grouped['발주금액'].sum()
             self.log(f"\n💰 전체 차액 (File1 - File2): {total_diff:,.0f}")
+
+            # --- Generate Report File (마감자료 with PRL.xlsx) ---
+            # Moved here to use comparison results for highlighting
+            try:
+                report_cols = [
+                    "Type", "Date", "Part No.", "Part Type", "Part Group", 
+                    "Description", "Qty", "Unit Price", "Total Price", 
+                    "Doc No.", "Mach No.", "Vendor"
+                ]
+                
+                # Check if all columns exist
+                missing_report_cols = [c for c in report_cols if c not in df1_filtered.columns]
+                if missing_report_cols:
+                    self.log(f"\n[주의] 리포트 생성 중 다음 컬럼이 없어 제외됩니다: {missing_report_cols}")
+                    existing_report_cols = [c for c in report_cols if c in df1_filtered.columns]
+                    df_report = df1_filtered[existing_report_cols].copy()
+                else:
+                    df_report = df1_filtered[report_cols].copy()
+                
+                # Add Summary Row
+                if not df_report.empty:
+                    qty_sum = df_report['Qty'].sum() if 'Qty' in df_report.columns else 0
+                    price_sum = df_report['Total Price'].sum() if 'Total Price' in df_report.columns else 0
+                    
+                    # Create summary row
+                    summary_row = {col: "" for col in df_report.columns}
+                    summary_row['Description'] = "QC(자재)"
+                    if 'Qty' in df_report.columns:
+                        summary_row['Qty'] = qty_sum
+                    if 'Total Price' in df_report.columns:
+                        summary_row['Total Price'] = price_sum
+                        
+                    # Append summary row
+                    df_report = pd.concat([df_report, pd.DataFrame([summary_row])], ignore_index=True)
+
+                report_filename = "마감자료 with PRL.xlsx"
+                df_report.to_excel(report_filename, index=False)
+                
+                # --- Apply Highlighting ---
+                # Highlight 'Total Price' in yellow for items only in File 1
+                if not only_file1.empty:
+                    wb = openpyxl.load_workbook(report_filename)
+                    ws = wb.active
+                    
+                    # Find column indices (1-based)
+                    header = [cell.value for cell in ws[1]]
+                    try:
+                        doc_no_idx = header.index("Doc No.") + 1
+                        total_price_idx = header.index("Total Price") + 1
+                        
+                        # Get list of unique Doc Nos
+                        unique_doc_nos = set(only_file1['Doc No.'].astype(str).tolist())
+                        
+                        yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+                        
+                        count_highlighted = 0
+                        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                            doc_no_cell = row[doc_no_idx - 1]
+                            if str(doc_no_cell.value).strip() in unique_doc_nos:
+                                row[total_price_idx - 1].fill = yellow_fill
+                                count_highlighted += 1
+                                
+                        wb.save(report_filename)
+                        self.log(f"\n[알림] '{report_filename}' 생성 완료.")
+                        self.log(f"  - 건수: {len(df_report)} 건 (합계 포함)")
+                        self.log(f"  - 노란색 하이라이트(File 1 Only): {count_highlighted} 건")
+                        
+                    except ValueError as ve:
+                        self.log(f"\n[주의] 하이라이트 적용 실패 (컬럼 찾기 오류): {ve}")
+                        
+            except Exception as e:
+                self.log(f"\n[오류] 리포트 파일 생성 실패: {str(e)}")
 
         except Exception as e:
             self.log(f"\n[오류 발생] {str(e)}")
