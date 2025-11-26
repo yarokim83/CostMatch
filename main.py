@@ -298,65 +298,100 @@ class ExcelComparatorApp(ctk.CTk):
                     "Doc No.", "Mach No.", "Vendor"
                 ]
                 
+                # 1. Prepare '자재' Data (WIRE ROPE, INVENTORY)
                 # Check if all columns exist
                 missing_report_cols = [c for c in report_cols if c not in df1_filtered.columns]
                 if missing_report_cols:
                     self.log(f"\n[주의] 리포트 생성 중 다음 컬럼이 없어 제외됩니다: {missing_report_cols}")
                     existing_report_cols = [c for c in report_cols if c in df1_filtered.columns]
-                    df_report = df1_filtered[existing_report_cols].copy()
+                    df_material = df1_filtered[existing_report_cols].copy()
                 else:
-                    df_report = df1_filtered[report_cols].copy()
+                    df_material = df1_filtered[report_cols].copy()
                 
-                # Add Summary Row
-                if not df_report.empty:
-                    qty_sum = df_report['Qty'].sum() if 'Qty' in df_report.columns else 0
-                    price_sum = df_report['Total Price'].sum() if 'Total Price' in df_report.columns else 0
+                # Add Summary Row to '자재'
+                if not df_material.empty:
+                    qty_sum = df_material['Qty'].sum() if 'Qty' in df_material.columns else 0
+                    price_sum = df_material['Total Price'].sum() if 'Total Price' in df_material.columns else 0
                     
                     # Create summary row
-                    summary_row = {col: "" for col in df_report.columns}
+                    summary_row = {col: "" for col in df_material.columns}
                     summary_row['Description'] = "QC(자재)"
-                    if 'Qty' in df_report.columns:
+                    if 'Qty' in df_material.columns:
                         summary_row['Qty'] = qty_sum
-                    if 'Total Price' in df_report.columns:
+                    if 'Total Price' in df_material.columns:
                         summary_row['Total Price'] = price_sum
                         
                     # Append summary row
-                    df_report = pd.concat([df_report, pd.DataFrame([summary_row])], ignore_index=True)
+                    df_material = pd.concat([df_material, pd.DataFrame([summary_row])], ignore_index=True)
+
+                # 2. Prepare '외주수리' Data (OUTSOURCING)
+                # User Request: Part Group contains 'OUTSOURCING' (not exact match)
+                
+                # Debug: Check Part Group values
+                self.log(f"\n[디버깅] 데이터 소스 확인")
+                self.log(f"  - 원본 File 1 전체 건수: {len(df1)} 건")
+                self.log(f"  - 자재(WIRE ROPE/INVENTORY) 필터링 후 건수: {len(df1_filtered)} 건")
+                
+                if 'Part Group' in df1.columns:
+                    unique_groups = df1['Part Group'].dropna().unique()
+                    self.log(f"  - File 1의 Part Group 값 목록 (상위 20개): {list(unique_groups)[:20]}")
+                    
+                    # Filter: Contains 'OUTSOURCING' (case-insensitive)
+                    mask = df1['Part Group'].astype(str).str.upper().str.contains('OUTSOURCING', na=False)
+                    df_outsourcing_raw = df1[mask].copy()
+                    self.log(f"  -> 'OUTSOURCING' 포함 매칭 건수: {len(df_outsourcing_raw)} 건")
+                else:
+                    self.log(f"\n[오류] File 1에 'Part Group' 컬럼이 없습니다.")
+                    df_outsourcing_raw = pd.DataFrame()
+                
+                if missing_report_cols:
+                    df_outsourcing = df_outsourcing_raw[existing_report_cols].copy()
+                else:
+                    df_outsourcing = df_outsourcing_raw[report_cols].copy()
 
                 report_filename = "마감자료 with PRL.xlsx"
-                df_report.to_excel(report_filename, index=False)
                 
-                # --- Apply Highlighting ---
+                # Write to Excel with multiple sheets
+                with pd.ExcelWriter(report_filename, engine='openpyxl') as writer:
+                    df_material.to_excel(writer, sheet_name='자재', index=False)
+                    df_outsourcing.to_excel(writer, sheet_name='외주수리', index=False)
+                
+                self.log(f"\n[알림] '{report_filename}' 생성 완료.")
+                self.log(f"  - 시트 '자재': {len(df_material)} 건 (합계 포함)")
+                self.log(f"  - 시트 '외주수리': {len(df_outsourcing)} 건")
+                
+                # --- Apply Highlighting (Only for '자재' sheet) ---
                 # Highlight 'Total Price' in yellow for items only in File 1
                 if not only_file1.empty:
                     wb = openpyxl.load_workbook(report_filename)
-                    ws = wb.active
-                    
-                    # Find column indices (1-based)
-                    header = [cell.value for cell in ws[1]]
-                    try:
-                        doc_no_idx = header.index("Doc No.") + 1
-                        total_price_idx = header.index("Total Price") + 1
+                    if '자재' in wb.sheetnames:
+                        ws = wb['자재']
                         
-                        # Get list of unique Doc Nos
-                        unique_doc_nos = set(only_file1['Doc No.'].astype(str).tolist())
-                        
-                        yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-                        
-                        count_highlighted = 0
-                        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
-                            doc_no_cell = row[doc_no_idx - 1]
-                            if str(doc_no_cell.value).strip() in unique_doc_nos:
-                                row[total_price_idx - 1].fill = yellow_fill
-                                count_highlighted += 1
-                                
-                        wb.save(report_filename)
-                        self.log(f"\n[알림] '{report_filename}' 생성 완료.")
-                        self.log(f"  - 건수: {len(df_report)} 건 (합계 포함)")
-                        self.log(f"  - 노란색 하이라이트(File 1 Only): {count_highlighted} 건")
-                        
-                    except ValueError as ve:
-                        self.log(f"\n[주의] 하이라이트 적용 실패 (컬럼 찾기 오류): {ve}")
+                        # Find column indices (1-based)
+                        header = [cell.value for cell in ws[1]]
+                        try:
+                            doc_no_idx = header.index("Doc No.") + 1
+                            total_price_idx = header.index("Total Price") + 1
+                            
+                            # Get list of unique Doc Nos
+                            unique_doc_nos = set(only_file1['Doc No.'].astype(str).tolist())
+                            
+                            yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+                            
+                            count_highlighted = 0
+                            for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                                doc_no_cell = row[doc_no_idx - 1]
+                                if str(doc_no_cell.value).strip() in unique_doc_nos:
+                                    row[total_price_idx - 1].fill = yellow_fill
+                                    count_highlighted += 1
+                                    
+                            wb.save(report_filename)
+                            self.log(f"  - '자재' 시트 하이라이트(File 1 Only): {count_highlighted} 건")
+                            
+                        except ValueError as ve:
+                            self.log(f"\n[주의] 하이라이트 적용 실패 (컬럼 찾기 오류): {ve}")
+                    else:
+                        self.log(f"\n[주의] '자재' 시트를 찾을 수 없어 하이라이트를 적용하지 못했습니다.")
                         
             except Exception as e:
                 self.log(f"\n[오류] 리포트 파일 생성 실패: {str(e)}")
