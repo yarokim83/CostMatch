@@ -349,6 +349,22 @@ class ExcelComparatorApp(ctk.CTk):
                 else:
                     df_outsourcing = df_outsourcing_raw[report_cols].copy()
 
+                # Add Summary Row to '외주수리'
+                if not df_outsourcing.empty:
+                    qty_sum = df_outsourcing['Qty'].sum() if 'Qty' in df_outsourcing.columns else 0
+                    price_sum = df_outsourcing['Total Price'].sum() if 'Total Price' in df_outsourcing.columns else 0
+                    
+                    # Create summary row
+                    summary_row = {col: "" for col in df_outsourcing.columns}
+                    summary_row['Description'] = "QC(외주수리)"
+                    if 'Qty' in df_outsourcing.columns:
+                        summary_row['Qty'] = qty_sum
+                    if 'Total Price' in df_outsourcing.columns:
+                        summary_row['Total Price'] = price_sum
+                        
+                    # Append summary row
+                    df_outsourcing = pd.concat([df_outsourcing, pd.DataFrame([summary_row])], ignore_index=True)
+
                 report_filename = "마감자료 with PRL.xlsx"
                 
                 # Write to Excel with multiple sheets
