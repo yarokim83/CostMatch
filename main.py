@@ -145,8 +145,9 @@ class ExcelComparatorApp(ctk.CTk):
             self.log(">>> 데이터 로딩 및 분석 시작...")
             
             # Define required columns
-            # File 1: QC (Needs 'Doc No.', 'Part Group', 'Total Price')
-            req_cols_1 = ['Doc No.', 'Part Group', 'Total Price']
+            # File 1: QC (Needs 'Doc No.', 'Part Group', 'Total Price' and report columns)
+            # We add a few key report columns to ensure we find the right header
+            req_cols_1 = ['Doc No.', 'Part Group', 'Total Price', 'Part No.', 'Vendor']
             # File 2: Cost (Needs 'PR No.' or 'PR No..1', 'Account name', '발주금액')
             # We relax the requirement here because we handle column selection dynamically
             req_cols_2 = ['Account name', '발주금액']
@@ -163,6 +164,30 @@ class ExcelComparatorApp(ctk.CTk):
             target_groups = ['WIRE ROPE', 'INVENTORY']
             df1_filtered = df1[df1['Part Group'].isin(target_groups)].copy()
             
+            # --- Generate Report File (마감자료 with PRL.xlsx) ---
+            try:
+                report_cols = [
+                    "Type", "Date", "Part No.", "Part Type", "Part Group", 
+                    "Description", "Qty", "Unit Price", "Total Price", 
+                    "Doc No.", "Mach No.", "Vendor"
+                ]
+                
+                # Check if all columns exist
+                missing_report_cols = [c for c in report_cols if c not in df1_filtered.columns]
+                if missing_report_cols:
+                    self.log(f"\n[주의] 리포트 생성 중 다음 컬럼이 없어 제외됩니다: {missing_report_cols}")
+                    existing_report_cols = [c for c in report_cols if c in df1_filtered.columns]
+                    df_report = df1_filtered[existing_report_cols].copy()
+                else:
+                    df_report = df1_filtered[report_cols].copy()
+                
+                report_filename = "마감자료 with PRL.xlsx"
+                df_report.to_excel(report_filename, index=False)
+                self.log(f"\n[알림] '{report_filename}' 파일이 생성되었습니다. (건수: {len(df_report)} 건)")
+                
+            except Exception as e:
+                self.log(f"\n[오류] 리포트 파일 생성 실패: {str(e)}")
+
             # Group by 'Doc No.' and sum 'Total Price'
             # Convert Doc No. to string to ensure matching works
             df1_filtered['Doc No.'] = df1_filtered['Doc No.'].astype(str).str.strip()
@@ -234,27 +259,6 @@ class ExcelComparatorApp(ctk.CTk):
                 self.log(f"  - File 1: 해당 ID 없음")
 
             # Check in File 2 (All columns)
-            found_in_cols = []
-            for col in df2.columns:
-                # Convert to string and check
-                if df2[col].astype(str).str.contains(target_id, na=False).any():
-                    found_in_cols.append(col)
-            
-            if found_in_cols:
-                self.log(f"  - File 2: '{target_id}'를 다음 컬럼에서 찾았습니다: {found_in_cols}")
-                for col in found_in_cols:
-                    val = df2[df2[col].astype(str).str.contains(target_id, na=False)][col].iloc[0]
-                    self.log(f"    -> 컬럼 '{col}' 값: '{val}' (repr: {repr(val)})")
-            else:
-                self.log(f"  - File 2: 파일 전체에서 해당 ID를 찾을 수 없습니다.")
-
-            # Check in File 2 (PR No. specific)
-            f2_match = df2_grouped[df2_grouped['PR No.'].str.contains(target_id, na=False)]
-            if not f2_match.empty:
-                raw_val = f2_match.iloc[0]['PR No.']
-                self.log(f"  - File 2 (현재 선택된 PR No. 컬럼): '{raw_val}' (길이: {len(raw_val)})")
-            else:
-                self.log(f"  - File 2 (현재 선택된 PR No. 컬럼): 해당 ID 없음")
 
             # Merge
             merged = pd.merge(

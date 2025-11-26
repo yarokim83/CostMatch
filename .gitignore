@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
-uploads/
 analysis_log.txt
-.DS_Store
+*.xlsx
+!requirements.txt
+!*.py
