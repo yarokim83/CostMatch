@@ -389,9 +389,15 @@ class ExcelComparatorApp(ctk.CTk):
             missing_doc_nos = set() # For highlighting later (Material)
             missing_doc_nos_out = set() # For highlighting later (Outsourcing)
             
-            # New sets for PR No. highlighting (File 2 PR No not in File 1 Doc No, per group)
-            unmatched_pr_nos_mat = set()
-            unmatched_pr_nos_out = set()
+            # Fix: Track MATCHED PR Nos instead of unmatched.
+            # If we track unmatched, a PR might be flagged as unmatched in one file loop 
+            # but matched in another (if multiple files per dept), causing false positives.
+            matched_pr_nos_mat = set()
+            matched_pr_nos_out = set()
+            
+            # Track amount mismatches (PR No. where Total Price != 발주금액)
+            amount_mismatch_pr_nos_mat = set()
+            amount_mismatch_pr_nos_out = set()
             
             report_cols = [
                 "Type", "Date", "Part No.", "Part Type", "Part Group", 
@@ -442,6 +448,12 @@ class ExcelComparatorApp(ctk.CTk):
                 df2_mat_grouped = pd.DataFrame()
                 if pr_col and pr_col in df2_mat.columns:
                     df2_mat[pr_col] = df2_mat[pr_col].astype(str).str.strip()
+                    # Ensure 'PR No.' column exists for matching
+                    if pr_col != 'PR No.':
+                        df2_mat['PR No.'] = df2_mat[pr_col]
+                    else:
+                        # If pr_col is 'PR No.', ensure it's clean
+                        df2_mat['PR No.'] = df2_mat[pr_col]
                 # Create grouped DataFrames for Material
                 df2_mat_grouped = pd.DataFrame()
                 if pr_col and pr_col in df2_mat.columns:
@@ -486,6 +498,11 @@ class ExcelComparatorApp(ctk.CTk):
                 df2_out_grouped = pd.DataFrame()
                 if pr_col and pr_col in df2_out.columns:
                     df2_out[pr_col] = df2_out[pr_col].astype(str).str.strip()
+                    # Ensure 'PR No.' column exists for matching
+                    if pr_col != 'PR No.':
+                        df2_out['PR No.'] = df2_out[pr_col]
+                    else:
+                        df2_out['PR No.'] = df2_out[pr_col]
                     
                     agg_dict = {'발주금액': 'sum'}
                     # Add other columns to aggregation
@@ -518,8 +535,8 @@ class ExcelComparatorApp(ctk.CTk):
                 df1 = self.load_excel_smart(f_path, req_cols_1)
                 
                 # --- Filter Data ---
-                # Material (WIRE ROPE, INVENTORY)
-                target_groups_mat = ['WIRE ROPE', 'INVENTORY']
+                # Material (WIRE ROPE, INVENTORY, TIRE)
+                target_groups_mat = ['WIRE ROPE', 'INVENTORY', 'TIRE']
                 df1_mat = df1[df1['Part Group'].isin(target_groups_mat)].copy()
                 
                 # Outsourcing (Contains 'OUTSOURCING')
@@ -546,19 +563,34 @@ class ExcelComparatorApp(ctk.CTk):
                 only_in_f1 = merged[merged['_merge'] == 'left_only']
                 missing_doc_nos.update(only_in_f1['Doc No.'].tolist())
                 
-                # Identify Unmatched PR Nos (File 2 PR No not in File 1 Doc No) - Group Scope
-                # We need to check which PR Nos in df2_mat are NOT in df1_mat['Doc No.']
+                only_in_f1 = merged[merged['_merge'] == 'left_only']
+                missing_doc_nos.update(only_in_f1['Doc No.'].tolist())
+                
+                # Identify MATCHED PR Nos and check for amount mismatches
                 if not df2_mat.empty:
-                    # Get list of Doc Nos in this group
                     doc_nos_in_group = set(df1_mat['Doc No.'].tolist())
-                    # Get list of PR Nos in this group (from df2_mat, which is filtered by account)
-                    # Note: df2_mat might have duplicates if we didn't group it yet, but here we want to highlight rows in the report.
-                    # The report uses df2_mat (raw rows).
-                    # So we check each row's PR No.
+                    # Create a dict of Doc No -> Total Price sum for this group
+                    doc_no_amounts = df1_mat.groupby('Doc No.')['Total Price'].sum().to_dict()
+                    
+                    # Check which PRs in this File 2 slice match ANY Doc No in this File 1
                     for idx, row in df2_mat.iterrows():
+                        # Use 'PR No.' which we standardized above
                         pr_val = str(row.get('PR No.', '')).strip()
-                        if pr_val and pr_val not in doc_nos_in_group:
-                            unmatched_pr_nos_mat.add(pr_val)
+                        if pr_val and pr_val in doc_nos_in_group:
+                            matched_pr_nos_mat.add(pr_val)
+                            
+                            # Check if amounts match
+                            f1_amount = doc_no_amounts.get(pr_val, 0)
+                            f2_amount = row.get('발주금액', 0)
+                            # Convert to float for comparison
+                            try:
+                                f1_amount = float(f1_amount) if f1_amount else 0
+                                f2_amount = float(f2_amount) if f2_amount else 0
+                                # Compare with small tolerance for floating point
+                                if abs(f1_amount - f2_amount) > 0.01:
+                                    amount_mismatch_pr_nos_mat.add(pr_val)
+                            except (ValueError, TypeError):
+                                pass  # Skip if conversion fails
 
                 # 2. Outsourcing (Doc No. vs PR No.)
                 if not df1_out.empty:
@@ -578,13 +610,33 @@ class ExcelComparatorApp(ctk.CTk):
                     only_in_f1_out = merged_out[merged_out['_merge'] == 'left_only']
                     missing_doc_nos_out.update(only_in_f1_out['Doc No.'].tolist())
 
-                    # Identify Unmatched PR Nos (Outsourcing)
+                    only_in_f1_out = merged_out[merged_out['_merge'] == 'left_only']
+                    missing_doc_nos_out.update(only_in_f1_out['Doc No.'].tolist())
+
+                    # Identify MATCHED PR Nos (Outsourcing) and check for amount mismatches
                     if not df2_out.empty:
                         doc_nos_in_group_out = set(df1_out['Doc No.'].tolist())
+                        # Create a dict of Doc No -> Total Price sum for this group
+                        doc_no_amounts_out = df1_out.groupby('Doc No.')['Total Price'].sum().to_dict()
+                        
                         for idx, row in df2_out.iterrows():
+                            # Use 'PR No.' which we standardized above
                             pr_val = str(row.get('PR No.', '')).strip()
-                            if pr_val and pr_val not in doc_nos_in_group_out:
-                                unmatched_pr_nos_out.add(pr_val)
+                            if pr_val and pr_val in doc_nos_in_group_out:
+                                matched_pr_nos_out.add(pr_val)
+                                
+                                # Check if amounts match
+                                f1_amount = doc_no_amounts_out.get(pr_val, 0)
+                                f2_amount = row.get('발주금액', 0)
+                                # Convert to float for comparison
+                                try:
+                                    f1_amount = float(f1_amount) if f1_amount else 0
+                                    f2_amount = float(f2_amount) if f2_amount else 0
+                                    # Compare with small tolerance for floating point
+                                    if abs(f1_amount - f2_amount) > 0.01:
+                                        amount_mismatch_pr_nos_out.add(pr_val)
+                                except (ValueError, TypeError):
+                                    pass  # Skip if conversion fails
 
                 # --- Prepare Report Data (Side-by-Side) ---
                 # Material
@@ -799,7 +851,7 @@ class ExcelComparatorApp(ctk.CTk):
                 orange_fill = PatternFill(start_color="FFC000", end_color="FFC000", fill_type="solid") # Orange-ish Gold
                 
                 # Material Sheet
-                if '자재' in wb.sheetnames and unmatched_pr_nos_mat:
+                if '자재' in wb.sheetnames:
                     ws = wb['자재']
                     header = [cell.value for cell in ws[1]]
                     if "PR No." in header:
@@ -809,13 +861,14 @@ class ExcelComparatorApp(ctk.CTk):
                             pr_no_cell = row[pr_no_idx - 1]
                             pr_no_val = str(pr_no_cell.value).strip() if pr_no_cell.value else ""
                             
-                            if pr_no_val and pr_no_val in unmatched_pr_nos_mat:
+                            # Highlight if PR No exists but is NOT in matched set
+                            if pr_no_val and pr_no_val not in matched_pr_nos_mat:
                                 pr_no_cell.fill = orange_fill
                                 count_mismatch += 1
                         self.log(f"  - '자재' 시트 PR No. 미매칭 하이라이트(주황색): {count_mismatch} 건")
 
                 # Outsourcing Sheet
-                if '외주수리' in wb.sheetnames and unmatched_pr_nos_out:
+                if '외주수리' in wb.sheetnames:
                     ws = wb['외주수리']
                     header = [cell.value for cell in ws[1]]
                     if "PR No." in header:
@@ -825,10 +878,52 @@ class ExcelComparatorApp(ctk.CTk):
                             pr_no_cell = row[pr_no_idx - 1]
                             pr_no_val = str(pr_no_cell.value).strip() if pr_no_cell.value else ""
                             
-                            if pr_no_val and pr_no_val in unmatched_pr_nos_out:
+                            # Highlight if PR No exists but is NOT in matched set
+                            if pr_no_val and pr_no_val not in matched_pr_nos_out:
                                 pr_no_cell.fill = orange_fill
                                 count_mismatch_out += 1
                         self.log(f"  - '외주수리' 시트 PR No. 미매칭 하이라이트(주황색): {count_mismatch_out} 건")
+
+                # Apply Highlighting (Amount Mismatch - Yellow)
+                yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+                
+                # Material Sheet
+                if '자재' in wb.sheetnames:
+                    ws = wb['자재']
+                    header = [cell.value for cell in ws[1]]
+                    if "PR No." in header and "발주금액" in header:
+                        pr_no_idx = header.index("PR No.") + 1
+                        amount_idx = header.index("발주금액") + 1
+                        count_amount_mismatch = 0
+                        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                            pr_no_cell = row[pr_no_idx - 1]
+                            amount_cell = row[amount_idx - 1]
+                            pr_no_val = str(pr_no_cell.value).strip() if pr_no_cell.value else ""
+                            
+                            # Highlight if PR No is in amount mismatch set
+                            if pr_no_val and pr_no_val in amount_mismatch_pr_nos_mat:
+                                amount_cell.fill = yellow_fill
+                                count_amount_mismatch += 1
+                        self.log(f"  - '자재' 시트 금액 불일치 하이라이트(노란색): {count_amount_mismatch} 건")
+
+                # Outsourcing Sheet
+                if '외주수리' in wb.sheetnames:
+                    ws = wb['외주수리']
+                    header = [cell.value for cell in ws[1]]
+                    if "PR No." in header and "발주금액" in header:
+                        pr_no_idx = header.index("PR No.") + 1
+                        amount_idx = header.index("발주금액") + 1
+                        count_amount_mismatch_out = 0
+                        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                            pr_no_cell = row[pr_no_idx - 1]
+                            amount_cell = row[amount_idx - 1]
+                            pr_no_val = str(pr_no_cell.value).strip() if pr_no_cell.value else ""
+                            
+                            # Highlight if PR No is in amount mismatch set
+                            if pr_no_val and pr_no_val in amount_mismatch_pr_nos_out:
+                                amount_cell.fill = yellow_fill
+                                count_amount_mismatch_out += 1
+                        self.log(f"  - '외주수리' 시트 금액 불일치 하이라이트(노란색): {count_amount_mismatch_out} 건")
 
                 wb.save(report_filename)
             except Exception as e:
