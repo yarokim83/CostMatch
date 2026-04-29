@@ -134,7 +134,9 @@ class ExcelComparatorApp(ctk.CTk):
                 fname_upper = os.path.basename(filename).upper()
                 
                 # Check for MV or TL first
-                if 'MV' in fname_upper or 'TL' in fname_upper:
+                if 'LUB' in fname_upper or 'LUBRICANT' in fname_upper:
+                    guessed_type = 'Lubricants'
+                elif 'MV' in fname_upper or 'TL' in fname_upper:
                     guessed_type = '기타'
                 # Check for TC (maps to ARMGC)
                 elif 'TC' in fname_upper:
@@ -172,7 +174,9 @@ class ExcelComparatorApp(ctk.CTk):
                     # self.log(f"  - 파일 검사: {filename}")
                     
                     # Check for MV or TL first
-                    if 'MV' in fname_upper or 'TL' in fname_upper:
+                    if 'LUB' in fname_upper or 'LUBRICANT' in fname_upper:
+                        guessed_type = 'Lubricants'
+                    elif 'MV' in fname_upper or 'TL' in fname_upper:
                         guessed_type = '기타'
                     # Check for TC (maps to ARMGC)
                     elif 'TC' in fname_upper:
@@ -340,6 +344,13 @@ class ExcelComparatorApp(ctk.CTk):
                 df[default_name] = ""
                 return default_name
 
+            def filter_account_name(df, account_names):
+                if isinstance(account_names, str):
+                    account_names = [account_names]
+                normalized_account = df['Account name'].astype(str).str.replace(" ", "", regex=False).str.strip()
+                normalized_targets = [str(name).replace(" ", "").strip() for name in account_names]
+                return df[normalized_account.isin(normalized_targets)].copy()
+
             # Find '발주처' column
             vendor_col_f2 = find_col(df2, ['발주처', 'Vendor', 'Supplier', '거래처', 'Vendor Name'], '발주처')
             
@@ -364,13 +375,13 @@ class ExcelComparatorApp(ctk.CTk):
                 'ECH': '장비 자재비-ECH',
                 'FL': '장비 자재비-FL',
                 '기타': '장비 자재비-기타',
-                'Lubricants': '장비 자재비-Lubricants'
+                'Lubricants': '동력비-윤활유'
             }
 
             # Account Mapping (Outsourcing)
             account_mapping_out = {
-                'QC': '수선유지비-외주수리-QC',
-                'ARMGC': '수선유지비-외주수리-ATC', # Mapped to ATC
+                'QC': ['수선유지비-외주수리-QC', '수선유지비-외주수리 QC'],
+                'ARMGC': ['수선유지비-외주수리-ATC', '수선유지비-외주수리-ARMGC', '수선유지비-외주수리-TC'], # Mapped to ATC
                 'RS': '수선유지비-외주수리-RS',
                 'YT': '수선유지비-외주수리-YT',
                 'YC': '수선유지비-외주수리-YC',
@@ -415,11 +426,11 @@ class ExcelComparatorApp(ctk.CTk):
                 
                 # 1. Filter File 2 for this type (Material)
                 target_account_mat = account_mapping_mat.get(f_type, f'장비 자재비-{f_type}')
-                df2_mat = df2[df2['Account name'] == target_account_mat].copy()
+                df2_mat = filter_account_name(df2, target_account_mat)
                 
                 # 2. Filter File 2 for this type (Outsourcing)
                 target_account_out = account_mapping_out.get(f_type, f'수선유지비-외주수리-{f_type}')
-                df2_out = df2[df2['Account name'] == target_account_out].copy()
+                df2_out = filter_account_name(df2, target_account_out)
                 
                 if df2_mat.empty:
                     self.log(f"  [주의] 파일 2에서 자재 계정 '{target_account_mat}' 항목을 찾을 수 없습니다.")
@@ -533,18 +544,29 @@ class ExcelComparatorApp(ctk.CTk):
                 # 3. Load File 1
                 req_cols_1 = ['Doc No.', 'Part Group', 'Total Price', 'Part No.', 'Vendor']
                 df1 = self.load_excel_smart(f_path, req_cols_1)
+                df1.columns = [str(col).strip() for col in df1.columns]
                 
                 # --- Filter Data ---
                 # Material (WIRE ROPE, INVENTORY, TIRE)
                 target_groups_mat = ['WIRE ROPE', 'INVENTORY', 'TIRE']
-                df1_mat = df1[df1['Part Group'].isin(target_groups_mat)].copy()
+                part_group_upper = df1['Part Group'].astype(str).str.upper()
+                mask_lub = part_group_upper.str.contains('LUB', na=False)
+                if f_type == 'Lubricants':
+                    mask_mat = mask_lub
+                else:
+                    mask_mat = part_group_upper.isin(target_groups_mat) & ~mask_lub
+                df1_mat = df1[mask_mat].copy()
+                if f_type == 'Lubricants' and not df1_mat.empty and 'Type' in df1_mat.columns:
+                    df1_mat['Type'] = 'Lubricants'
                 
                 # Outsourcing (Contains 'OUTSOURCING')
                 if 'Part Group' in df1.columns:
                     mask_out = df1['Part Group'].astype(str).str.upper().str.contains('OUTSOURCING', na=False)
                     df1_out = df1[mask_out].copy()
+                    self.log(f"  -> File 1 외주수리 필터링: {len(df1_out)} 건")
                 else:
                     df1_out = pd.DataFrame()
+                    self.log("  -> ⚠️ File 1에서 'Part Group' 컬럼을 찾을 수 없어 외주수리 추출이 불가능합니다.")
 
                 # --- Comparison (for Highlighting) ---
                 # 1. Material (Doc No. vs PR No.)
@@ -766,6 +788,21 @@ class ExcelComparatorApp(ctk.CTk):
             # --- Generate Consolidated Report ---
             file2_dir = os.path.dirname(self.file2_path)
             report_filename = os.path.join(file2_dir, "마감자료 with PRL.xlsx")
+            if os.path.exists(report_filename):
+                try:
+                    with open(report_filename, "a+b"):
+                        pass
+                except PermissionError:
+                    base_name = "마감자료 with PRL"
+                    ext = ".xlsx"
+                    idx = 1
+                    while True:
+                        alt_report_filename = os.path.join(file2_dir, f"{base_name}_{idx}{ext}")
+                        if not os.path.exists(alt_report_filename):
+                            report_filename = alt_report_filename
+                            self.log(f"  -> 기존 결과 파일이 열려 있어 새 파일명으로 저장합니다: {os.path.basename(report_filename)}")
+                            break
+                        idx += 1
             
             df_mat_left = pd.DataFrame(final_material_rows_left, columns=report_cols)
             df_mat_right = pd.DataFrame(final_material_rows_right, columns=report_cols_f2)

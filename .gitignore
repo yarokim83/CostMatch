@@ -2,5 +2,7 @@ __pycache__/
 *.pyc
 analysis_log.txt
 *.xlsx
+build/
+dist/
 !requirements.txt
 !*.py
